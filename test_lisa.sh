@@ -1,0 +1,1 @@
+deepspeed --include localhost:2,3 --master_port=24999 train_ds.py   --dataset_dir='/home/hrkim/dataset'   --vision_pretrained="/home/hrkim/dataset/sam_vit_h_4b8939.pth"   --exp_name="lisa-7b"   --eval_only

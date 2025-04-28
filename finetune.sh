@@ -1,0 +1,1 @@
+deepspeed --include localhost:2,3 finetune.py --exp_name "lisa_finetune_key_fusion_ce_es_upsamle"
