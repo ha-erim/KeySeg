@@ -15,9 +15,8 @@ from torch.utils.tensorboard import SummaryWriter
     
 from model.KISA import LISAForCausalLM
 from model.llava import conversation as conversation_lib
-# from utils.dataset import ValDataset
-# from utils.dataset import collate_fn as test_collate_fn
-from utils.reason_seg_key_dataset import ReasonSegKeyDataset, ValDataset, collate_fn, collate_fn_val
+from utils.reason_seg_key_dataset import ValDataset, collate_fn_val
+from utils.reason_refer import HybridDataset, collate_fn
 from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                          AverageMeter, ProgressMeter, Summary, dict_to_cuda,
                          intersectionAndUnionGPU)
@@ -81,27 +80,27 @@ def parse_args(args):
     parser.add_argument("--load_in_8bit", action="store_true", default=False)
     parser.add_argument("--load_in_4bit", action="store_true", default=False)
 
-    # parser.add_argument(
-    #     "--dataset", default="sem_seg||refer_seg||vqa||reason_seg", type=str
-    # )
-    # parser.add_argument("--sample_rates", default="9,3,3,1", type=str)
+    parser.add_argument(
+        "--dataset", default="refer_seg||reason_seg", type=str
+    )
+    parser.add_argument("--sample_rates", default="9,3", type=str)
     # parser.add_argument(
     #     "--sem_seg_data",
     #     default="ade20k||cocostuff||pascal_part||paco_lvis||mapillary",
     #     type=str,
     # )
-    # parser.add_argument(
-    #     "--refer_seg_data", default="refclef||refcoco||refcoco+||refcocog", type=str
-    # )
-    parser.add_argument("--vqa_data", default="llava_instruct_150k", type=str)
+    parser.add_argument(
+        "--refer_seg_data", default="refcocog", type=str
+    )
+    # parser.add_argument("--vqa_data", default="llava_instruct_150k", type=str)
     parser.add_argument("--reason_seg_data", default="ReasonSeg|train", type=str)
     parser.add_argument("--val_dataset", default="ReasonSeg|val", type=str)
     parser.add_argument("--test_dataset", default="ReasonSeg|test", type=str)
     parser.add_argument("--dataset_dir", default="/home/hrkim/dataset", type=str)
     parser.add_argument("--log_base_dir", default="./runs", type=str)
     parser.add_argument("--exp_name", default="lisa", type=str)
-    parser.add_argument("--epochs", default=30, type=int)
-    parser.add_argument("--steps_per_epoch", default=100, type=int)
+    parser.add_argument("--epochs", default=10, type=int)
+    parser.add_argument("--steps_per_epoch", default=200, type=int)
     parser.add_argument(
         "--batch_size", default=2, type=int, help="batch size per device per step"
     )
@@ -139,7 +138,7 @@ def parse_args(args):
     parser.add_argument("--start_epoch", default=0, type=int)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True)
     # parser.add_argument("--train_mask_decoder", action="store_true", default=True)
-    parser.add_argument("--train_mask_decoder", default=False)
+    parser.add_argument("--train_mask_decoder", default=True)
     parser.add_argument("--use_mm_start_end", action="store_true", default=True)
     parser.add_argument("--auto_resume", action="store_true", default=True)
     parser.add_argument(
@@ -305,19 +304,36 @@ def main(args):
 
     world_size = torch.cuda.device_count()
     args.distributed = world_size > 1
-    train_dataset = ReasonSegKeyDataset(
+    # train_dataset = ReasonSegKeyDataset(
+    #     args.dataset_dir,
+    #     tokenizer,
+    #     args.vision_tower,
+    #     samples_per_epoch=args.batch_size,
+    #     precision=args.precision,
+    #     image_size=args.image_size,
+    #     num_classes_per_sample=args.num_classes_per_sample,
+    #     exclude_val=args.exclude_val,
+    #     reason_seg_data=args.reason_seg_data,
+    #     explanatory=args.explanatory,
+    # )
+    train_dataset = HybridDataset(
         args.dataset_dir,
         tokenizer,
         args.vision_tower,
-        samples_per_epoch=args.batch_size,
+        samples_per_epoch=args.batch_size
+        * args.grad_accumulation_steps
+        * args.steps_per_epoch
+        * world_size,
         precision=args.precision,
         image_size=args.image_size,
         num_classes_per_sample=args.num_classes_per_sample,
         exclude_val=args.exclude_val,
+        dataset=args.dataset,
+        sample_rate=[float(x) for x in args.sample_rates.split(",")],
+        refer_seg_data=args.refer_seg_data,
         reason_seg_data=args.reason_seg_data,
         explanatory=args.explanatory,
     )
-
     if args.no_eval == False:
         val_dataset = ValDataset(
             args.dataset_dir,
@@ -422,7 +438,7 @@ def main(args):
         if args.local_rank == 0:
             print(f"[Evaluation Mode] Loading checkpoint weights from: {args.ckpt}")
         print("Loading state_dict from ckpt")
-        load_path, client_state = model_engine.load_checkpoint("runs/lisa_finetune_key_fusion_ce_es_upsamle/ckpt_model")
+        load_path, client_state = model_engine.load_checkpoint("runs/key_fusion_ce_es_upsamle_sa_tmd/ckpt_model")
 
 
 

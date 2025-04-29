@@ -117,161 +117,250 @@ class ReferSegDataset(torch.utils.data.Dataset):
         x = F.pad(x, (0, padw, 0, padh))
         return x
 
+    # def __getitem__(self, idx):
+    #     ds = random.randint(0, len(self.refer_seg_ds_list) - 1)
+    #     ds = self.refer_seg_ds_list[ds]
+    #     refer_seg_ds = self.refer_seg_data[ds]
+    #     images = refer_seg_ds["images"]
+    #     annotations = refer_seg_ds["annotations"]
+    #     img2refs = refer_seg_ds["img2refs"]
+    #     idx = random.randint(0, len(images) - 1)
+    #     image_info = images[idx]
+    #     image_path = image_info["file_name"]
+    #     image_id = image_info["id"]
+    #     refs = img2refs[image_id]
+    #     if len(refs) == 0:
+    #         return self.__getitem__(0)
+
+    #     sents = []
+    #     ann_ids = []
+    #     for ref in refs:
+    #         for sent in ref["sentences"]:
+    #             text = sent["sent"]
+    #             sents.append(text)
+    #             ann_ids.append(ref["ann_id"])
+    #     if len(sents) >= self.num_classes_per_sample:
+    #         sampled_inds = np.random.choice(
+    #             list(range(len(sents))), size=self.num_classes_per_sample, replace=False
+    #         )
+    #     else:
+    #         sampled_inds = list(range(len(sents)))
+    #     sampled_sents = np.vectorize(sents.__getitem__)(sampled_inds).tolist()
+    #     # sampled_ann_ids = np.vectorize(ann_ids.__getitem__)(sampled_inds).tolist()
+    #     sampled_ann_ids = [ann_ids[ind] for ind in sampled_inds]
+    #     sampled_classes = sampled_sents
+    #     image = cv2.imread(image_path)
+    #     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    #     # preprocess image for clip
+    #     image_clip = self.clip_image_processor.preprocess(image, return_tensors="pt")[
+    #         "pixel_values"
+    #     ][0]
+
+    #     image = self.transform.apply_image(image)  # preprocess image for sam
+    #     resize = image.shape[:2]
+
+    #     questions = []
+    #     answers = []
+    #     for text in sampled_classes:
+    #         text = text.strip()
+    #         assert len(text.split("||")) == 1
+    #         question_template = random.choice(self.short_question_list)
+    #         questions.append(question_template.format(class_name=text.lower()))
+    #         answers.append(random.choice(self.answer_list))
+
+    #     conversations = []
+    #     conv = conversation_lib.default_conversation.copy()
+
+    #     i = 0
+    #     while i < len(questions):
+    #         conv.messages = []
+    #         conv.append_message(conv.roles[0], questions[i])
+    #         conv.append_message(conv.roles[1], answers[i])
+    #         conversations.append(conv.get_prompt())
+    #         i += 1
+
+    #     image = self.preprocess(torch.from_numpy(image).permute(2, 0, 1).contiguous())
+
+    #     flag = False
+    #     masks = []
+    #     for ann_id in sampled_ann_ids:
+    #         if isinstance(ann_id, list):
+    #             flag = True
+    #             if -1 in ann_id:
+    #                 assert len(ann_id) == 1
+    #                 m = np.zeros((image_info["height"], image_info["width"])).astype(
+    #                     np.uint8
+    #                 )
+    #             else:
+    #                 m_final = np.zeros(
+    #                     (image_info["height"], image_info["width"])
+    #                 ).astype(np.uint8)
+    #                 for ann_id_i in ann_id:
+    #                     ann = annotations[ann_id_i]
+
+    #                     if len(ann["segmentation"]) == 0:
+    #                         m = np.zeros(
+    #                             (image_info["height"], image_info["width"])
+    #                         ).astype(np.uint8)
+    #                     else:
+    #                         if type(ann["segmentation"][0]) == list:  # polygon
+    #                             rle = mask.frPyObjects(
+    #                                 ann["segmentation"],
+    #                                 image_info["height"],
+    #                                 image_info["width"],
+    #                             )
+    #                         else:
+    #                             rle = ann["segmentation"]
+    #                             for i in range(len(rle)):
+    #                                 if not isinstance(rle[i]["counts"], bytes):
+    #                                     rle[i]["counts"] = rle[i]["counts"].encode()
+    #                         m = mask.decode(rle)
+    #                         m = np.sum(
+    #                             m, axis=2
+    #                         )  # sometimes there are multiple binary map (corresponding to multiple segs)
+    #                         m = m.astype(np.uint8)  # convert to np.uint8
+    #                     m_final = m_final | m
+    #                 m = m_final
+    #             masks.append(m)
+    #             continue
+
+    #         ann = annotations[ann_id]
+
+    #         if len(ann["segmentation"]) == 0:
+    #             m = np.zeros((image_info["height"], image_info["width"])).astype(
+    #                 np.uint8
+    #             )
+    #             masks.append(m)
+    #             continue
+
+    #         if type(ann["segmentation"][0]) == list:  # polygon
+    #             rle = mask.frPyObjects(
+    #                 ann["segmentation"], image_info["height"], image_info["width"]
+    #             )
+    #         else:
+    #             rle = ann["segmentation"]
+    #             for i in range(len(rle)):
+    #                 if not isinstance(rle[i]["counts"], bytes):
+    #                     rle[i]["counts"] = rle[i]["counts"].encode()
+    #         m = mask.decode(rle)
+    #         m = np.sum(
+    #             m, axis=2
+    #         )  # sometimes there are multiple binary map (corresponding to multiple segs)
+    #         m = m.astype(np.uint8)  # convert to np.uint8
+    #         masks.append(m)
+
+    #     masks = np.stack(masks, axis=0)
+
+    #     # if ds == 'grefcoco' and flag:
+    #     #     import shutil
+    #     #     image_name = image_path.split("/")[-1]
+    #     #     save_dir = os.path.join("/group/30042/xlai/LISA_refactor_final/debug", image_name.split(".")[0])
+    #     #     os.makedirs(save_dir, exist_ok=True)
+    #     #     shutil.copy(image_path, save_dir)
+    #     #     for i in range(masks.shape[0]):
+    #     #         cv2.imwrite(os.path.join(save_dir, "{}_{}_{}.jpg".format(image_name, i, sampled_classes[i])), masks[i].astype(np.int32) * 100)
+
+    #     masks = torch.from_numpy(masks)
+    #     label = torch.ones(masks.shape[1], masks.shape[2]) * self.ignore_label
+
+    #     return (
+    #         image_path,
+    #         image,
+    #         image_clip,
+    #         conversations,
+    #         masks,
+    #         label,
+    #         resize,
+    #         questions,
+    #         sampled_classes,
+    #     )
     def __getitem__(self, idx):
-        ds = random.randint(0, len(self.refer_seg_ds_list) - 1)
-        ds = self.refer_seg_ds_list[ds]
+        ds = random.choice(self.refer_seg_ds_list)
         refer_seg_ds = self.refer_seg_data[ds]
         images = refer_seg_ds["images"]
         annotations = refer_seg_ds["annotations"]
         img2refs = refer_seg_ds["img2refs"]
-        idx = random.randint(0, len(images) - 1)
-        image_info = images[idx]
+        image_info = random.choice(images)
         image_path = image_info["file_name"]
         image_id = image_info["id"]
-        refs = img2refs[image_id]
+        refs = img2refs.get(image_id, [])
+
         if len(refs) == 0:
             return self.__getitem__(0)
 
-        sents = []
-        ann_ids = []
+        # 문장 및 annotation id 수집
+        sents, ann_ids = [], []
         for ref in refs:
             for sent in ref["sentences"]:
-                text = sent["sent"]
-                sents.append(text)
+                sents.append(sent["sent"])
                 ann_ids.append(ref["ann_id"])
+
+        # 샘플링
         if len(sents) >= self.num_classes_per_sample:
-            sampled_inds = np.random.choice(
-                list(range(len(sents))), size=self.num_classes_per_sample, replace=False
-            )
+            sampled_inds = np.random.choice(len(sents), self.num_classes_per_sample, replace=False)
         else:
             sampled_inds = list(range(len(sents)))
-        sampled_sents = np.vectorize(sents.__getitem__)(sampled_inds).tolist()
-        # sampled_ann_ids = np.vectorize(ann_ids.__getitem__)(sampled_inds).tolist()
-        sampled_ann_ids = [ann_ids[ind] for ind in sampled_inds]
-        sampled_classes = sampled_sents
+
+        sampled_sents = [sents[i] for i in sampled_inds]
+        sampled_ann_ids = [ann_ids[i] for i in sampled_inds]
+        sampled_classes = sampled_sents  # keyword로 사용
+
+        # 이미지 로드
         image = cv2.imread(image_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        # preprocess image for clip
-        image_clip = self.clip_image_processor.preprocess(image, return_tensors="pt")[
-            "pixel_values"
-        ][0]
-
-        image = self.transform.apply_image(image)  # preprocess image for sam
+        image_clip = self.clip_image_processor.preprocess(image, return_tensors="pt")["pixel_values"][0]
+        image = self.transform.apply_image(image)
         resize = image.shape[:2]
+        image = self.preprocess(torch.from_numpy(image).permute(2, 0, 1).contiguous())
 
-        questions = []
-        answers = []
+        # 질문/답변/대화 생성
+        questions, answers = [], []
         for text in sampled_classes:
-            text = text.strip()
-            assert len(text.split("||")) == 1
             question_template = random.choice(self.short_question_list)
             questions.append(question_template.format(class_name=text.lower()))
             answers.append(random.choice(self.answer_list))
 
         conversations = []
         conv = conversation_lib.default_conversation.copy()
-
-        i = 0
-        while i < len(questions):
+        for q, a in zip(questions, answers):
             conv.messages = []
-            conv.append_message(conv.roles[0], questions[i])
-            conv.append_message(conv.roles[1], answers[i])
+            conv.append_message(conv.roles[0], q)
+            conv.append_message(conv.roles[1], a)
             conversations.append(conv.get_prompt())
-            i += 1
 
-        image = self.preprocess(torch.from_numpy(image).permute(2, 0, 1).contiguous())
-
-        flag = False
+        # 마스크 생성
         masks = []
         for ann_id in sampled_ann_ids:
-            if isinstance(ann_id, list):
-                flag = True
-                if -1 in ann_id:
-                    assert len(ann_id) == 1
-                    m = np.zeros((image_info["height"], image_info["width"])).astype(
-                        np.uint8
-                    )
-                else:
-                    m_final = np.zeros(
-                        (image_info["height"], image_info["width"])
-                    ).astype(np.uint8)
-                    for ann_id_i in ann_id:
-                        ann = annotations[ann_id_i]
-
-                        if len(ann["segmentation"]) == 0:
-                            m = np.zeros(
-                                (image_info["height"], image_info["width"])
-                            ).astype(np.uint8)
-                        else:
-                            if type(ann["segmentation"][0]) == list:  # polygon
-                                rle = mask.frPyObjects(
-                                    ann["segmentation"],
-                                    image_info["height"],
-                                    image_info["width"],
-                                )
-                            else:
-                                rle = ann["segmentation"]
-                                for i in range(len(rle)):
-                                    if not isinstance(rle[i]["counts"], bytes):
-                                        rle[i]["counts"] = rle[i]["counts"].encode()
-                            m = mask.decode(rle)
-                            m = np.sum(
-                                m, axis=2
-                            )  # sometimes there are multiple binary map (corresponding to multiple segs)
-                            m = m.astype(np.uint8)  # convert to np.uint8
-                        m_final = m_final | m
-                    m = m_final
-                masks.append(m)
-                continue
-
             ann = annotations[ann_id]
-
-            if len(ann["segmentation"]) == 0:
-                m = np.zeros((image_info["height"], image_info["width"])).astype(
-                    np.uint8
-                )
-                masks.append(m)
-                continue
-
-            if type(ann["segmentation"][0]) == list:  # polygon
-                rle = mask.frPyObjects(
-                    ann["segmentation"], image_info["height"], image_info["width"]
-                )
+            if not ann["segmentation"]:
+                m = np.zeros((image_info["height"], image_info["width"]), dtype=np.uint8)
             else:
-                rle = ann["segmentation"]
-                for i in range(len(rle)):
-                    if not isinstance(rle[i]["counts"], bytes):
-                        rle[i]["counts"] = rle[i]["counts"].encode()
-            m = mask.decode(rle)
-            m = np.sum(
-                m, axis=2
-            )  # sometimes there are multiple binary map (corresponding to multiple segs)
-            m = m.astype(np.uint8)  # convert to np.uint8
+                if isinstance(ann["segmentation"][0], list):  # polygon
+                    rle = mask.frPyObjects(ann["segmentation"], image_info["height"], image_info["width"])
+                else:
+                    rle = ann["segmentation"]
+                    for r in rle:
+                        if not isinstance(r["counts"], bytes):
+                            r["counts"] = r["counts"].encode()
+                m = mask.decode(rle)
+                m = np.sum(m, axis=2).astype(np.uint8)
             masks.append(m)
-
-        masks = np.stack(masks, axis=0)
-
-        # if ds == 'grefcoco' and flag:
-        #     import shutil
-        #     image_name = image_path.split("/")[-1]
-        #     save_dir = os.path.join("/group/30042/xlai/LISA_refactor_final/debug", image_name.split(".")[0])
-        #     os.makedirs(save_dir, exist_ok=True)
-        #     shutil.copy(image_path, save_dir)
-        #     for i in range(masks.shape[0]):
-        #         cv2.imwrite(os.path.join(save_dir, "{}_{}_{}.jpg".format(image_name, i, sampled_classes[i])), masks[i].astype(np.int32) * 100)
-
-        masks = torch.from_numpy(masks)
+        masks = torch.from_numpy(np.stack(masks, axis=0))
         label = torch.ones(masks.shape[1], masks.shape[2]) * self.ignore_label
 
+        # 반환 (총 12개 항목)
         return (
-            image_path,
-            image,
-            image_clip,
-            conversations,
-            masks,
-            label,
-            resize,
-            questions,
-            sampled_classes,
+            image_path,            # str
+            image,                 # torch.Tensor (3, H, W)
+            image_clip,            # torch.Tensor (3, H, W)
+            conversations,         # list of str
+            masks,                 # torch.Tensor (N, H, W)
+            label,                 # torch.Tensor (H, W)
+            resize,                # tuple
+            questions,             # list of str
+            sampled_classes,       # list of str (→ keywords)
+            False,                 # inference flag
+            sampled_classes        # keywords list
         )
+
