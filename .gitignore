@@ -1,4 +1,7 @@
 **/__pycache__
 runs/
 .vscode/
+mask_vis_output/
+finetune.sh
+test.sh
 

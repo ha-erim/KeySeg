@@ -12,130 +12,124 @@ from .llava.model.language_model.llava_llama import (LlavaLlamaForCausalLM,
                                                      LlavaLlamaModel)
 from .segment_anything import build_sam_vit_h
 
-class SimpleSelfAttention(nn.Module):
-    def __init__(self, dim):
+class LightSelfAttention(nn.Module):
+    def __init__(self, dim, heads=1):
         super().__init__()
+        self.heads = heads
+        self.head_dim = dim // heads
+        self.scale = self.head_dim ** -0.5
+
         self.q_proj = nn.Linear(dim, dim)
         self.k_proj = nn.Linear(dim, dim)
         self.v_proj = nn.Linear(dim, dim)
         self.out_proj = nn.Linear(dim, dim)
 
+        # self.reset_parameters()
+
+        # 🔵 out_proj는 float32로 강제 유지
+        self.out_proj = self.out_proj.to(torch.float32)
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.q_proj.weight)
+        nn.init.xavier_uniform_(self.k_proj.weight)
+        nn.init.xavier_uniform_(self.v_proj.weight)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        if self.q_proj.bias is not None:
+            nn.init.zeros_(self.q_proj.bias)
+        if self.k_proj.bias is not None:
+            nn.init.zeros_(self.k_proj.bias)
+        if self.v_proj.bias is not None:
+            nn.init.zeros_(self.v_proj.bias)
+        if self.out_proj.bias is not None:
+            nn.init.zeros_(self.out_proj.bias)
+
     def forward(self, x):
-        # x: [seq_len, dim]
-        Q = self.q_proj(x)
-        K = self.k_proj(x)
-        V = self.v_proj(x)
+        B, N, C = x.shape
 
-        attn_scores = Q @ K.transpose(-2, -1) / (Q.size(-1) ** 0.5)  # [seq_len, seq_len]
-        attn_weights = F.softmax(attn_scores, dim=-1)
+        x = torch.clamp(x, min=-1e4, max=1e4)  # 🔵 입력 클램프
 
-        if torch.isnan(attn_weights).any():
-            print("❗ NaN in attn_weights")
+        # 🔵 Projection 후 float32 변환
+        q = self.q_proj(x).to(torch.float32).view(B, N, self.heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).to(torch.float32).view(B, N, self.heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).to(torch.float32).view(B, N, self.heads, self.head_dim).transpose(1, 2)
 
-        context = attn_weights @ V  # [seq_len, dim]
-        return self.out_proj(context)
-    
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        out = attn @ v
+
+        out = out.transpose(1, 2).contiguous().view(B, N, C)
+        out = out.to(torch.bfloat16) 
+
+        out = self.out_proj(out)  # 🔵 여기서 out_proj는 float32 weight
+
+        return out  # float32 출력 (최종 bf16 변환은 KeywordSegFusionModule에서)
+
 
 class KeywordSegFusionModule(nn.Module):
-    def __init__(self, text_dim, vision_dim, hidden_dim=256, upsample_scale=2):
+    def __init__(self, text_dim, vision_dim, hidden_dim=256, upsample_size=12):
         super().__init__()
         self.query_proj = nn.Linear(vision_dim, hidden_dim)
         self.key_proj = nn.Linear(text_dim, hidden_dim)
         self.value_proj = nn.Linear(text_dim, hidden_dim)
-
         self.out_proj = nn.Linear(hidden_dim, vision_dim)
-        
-        self.self_attn = SimpleSelfAttention(dim=vision_dim)
+
+        # 🔵 out_proj는 float32로 강제 유지
+        self.out_proj = self.out_proj.to(torch.float32)
+
+        self.self_attn = LightSelfAttention(dim=vision_dim)
         self.norm1 = nn.LayerNorm(vision_dim)
         self.norm2 = nn.LayerNorm(vision_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(vision_dim, vision_dim * 2),
+            nn.GELU(),
+            nn.Linear(vision_dim * 2, vision_dim),
+        )
 
-        self.upsample_scale = upsample_scale
+        self.upsample_size = upsample_size
 
     def forward(self, key_list, segs_list):
         fused_segs = []
         for i in range(len(segs_list)):
-            seg = segs_list[i]   # [seq_len, vision_dim]
-            key = key_list[i]    # [text_len, text_dim] or [text_dim]
+            seg = segs_list[i]
+            key = key_list[i]
 
             if key.dim() == 1:
-                key = key.unsqueeze(0)  # [1, text_dim]
+                key = key.unsqueeze(0)
 
-            # ---------------------------
-            # Upsample seg
-            # ---------------------------
-            seg = seg.unsqueeze(0).transpose(1, 2)  # [1, vision_dim, seq_len]
-            upsampled_seg = F.interpolate(seg, scale_factor=self.upsample_scale, mode='linear', align_corners=False)
-            upsampled_seg = upsampled_seg.transpose(1, 2).squeeze(0)  # [upsampled_seq_len, vision_dim]
+            seg = seg.unsqueeze(0).transpose(1, 2)
+            upsampled_seg = F.interpolate(seg, size=self.upsample_size, mode='linear', align_corners=False)
+            upsampled_seg = upsampled_seg.transpose(1, 2).squeeze(0)
 
-            # ---------------------------
-            # Upsample key
-            # ---------------------------
-            key = key.unsqueeze(0).transpose(1, 2)  # [1, text_dim, text_len]
-            upsampled_key = F.interpolate(key, scale_factor=self.upsample_scale, mode='linear', align_corners=False)
-            upsampled_key = upsampled_key.transpose(1, 2).squeeze(0)  # [upsampled_text_len, text_dim]
+            Q = self.query_proj(upsampled_seg).to(torch.float32)
+            K = self.key_proj(key).to(torch.float32)
+            V = self.value_proj(key).to(torch.float32)
 
-            # Project Q, K, V
-            Q = self.query_proj(upsampled_seg)             # [upsampled_seq_len, hidden_dim]
-            K = self.key_proj(upsampled_key)               # [upsampled_text_len, hidden_dim]
-            V = self.value_proj(upsampled_key)             # [upsampled_text_len, hidden_dim]
+            attn_scores = torch.matmul(Q, K.transpose(0, 1)) / (Q.size(-1) ** 0.5)
+            attn_weights = F.softmax(attn_scores, dim=-1)
+            context = torch.matmul(attn_weights, V)
 
-            # Attention
-            attn_scores = torch.matmul(Q, K.transpose(0, 1)) / (Q.size(-1) ** 0.5)  # [upsampled_seq_len, upsampled_text_len]
-            attn_weights = F.softmax(attn_scores, dim=-1)  # [upsampled_seq_len, upsampled_text_len]
+            context = context.to(torch.bfloat16)  # 🔥 context를 bf16로 변환
 
-            context = torch.matmul(attn_weights, V)  # [upsampled_seq_len, hidden_dim]
+            context = self.out_proj(context)
 
-            # ---------------------------
-            # Downsample back to original seg length
-            # ---------------------------
-            context = context.unsqueeze(0).transpose(1, 2)  # [1, hidden_dim, upsampled_seq_len]
-            context = F.interpolate(context, size=seg.size(-1), mode='linear', align_corners=False)
-            context = context.transpose(1, 2).squeeze(0)    # [seq_len, hidden_dim]
-
-            context = self.out_proj(context)  # [seq_len, vision_dim]
-
-            # Residual connection
-            seg = seg.transpose(1, 2).squeeze(0)  # [seq_len, vision_dim] (원래대로)
-            seg = seg + context
-
-            # Self-attention + LayerNorm (옵션)
+            seg = upsampled_seg + context
+            # seg = torch.nan_to_num(seg, nan=0.0, posinf=1e3, neginf=-1e3)
             # seg = self.norm1(seg)
-            # seg_sa = self.self_attn(seg)
+
+            seg_sa = self.self_attn(seg.unsqueeze(0)).squeeze(0)
             # seg = self.norm2(seg + seg_sa)
+
+            seg = seg + self.mlp(seg)
+
+            seg = seg.unsqueeze(0).transpose(1, 2)
+            seg = F.interpolate(seg, size=segs_list[i].size(0), mode='linear', align_corners=False)
+            seg = seg.transpose(1, 2).squeeze(0)
+
+            seg = seg.to(torch.bfloat16)  # 최종 bf16으로 통일
 
             fused_segs.append(seg)
         return fused_segs
 
-
-
-    
-    # seg reweight   
-    # def forward(self, key, segs):
-    #     fused_segs = []
-    #     for i in range(len(segs)):
-    #         seg = segs[i]                                 # [seq_len, dim]
-    #         key_embed = self.keyword_proj(key[i])         # [dim]
-
-    #         seq_len, dim = seg.size()
-    #         key_expanded = key_embed.unsqueeze(0).expand(seq_len, -1)  # [seq_len, dim]
-    #         cat = torch.cat([seg, key_expanded], dim=-1)               # [seq_len, dim*2]
-
-    #         scores = self.attn_fc(cat).squeeze(-1)                     # [seq_len]
-    #         attn_weights = F.softmax(scores, dim=0)                    # [seq_len]
-
-    #         # soft-weighted 각 토큰 보정
-    #         reweighted_seg = seg * attn_weights.unsqueeze(1)          # [seq_len, dim]
-
-    #         fused_segs.append(reweighted_seg)
-
-    #         # NaN 체크 (선택적 디버깅)
-    #         if torch.isnan(reweighted_seg).any():
-    #             print(f"⚠️ NaN in reweighted_seg at sample {i}")
-
-    #     return fused_segs
 
 
 def dice_loss(
