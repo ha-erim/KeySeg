@@ -90,7 +90,7 @@ def parse_args(args):
     #     type=str,
     # )
     parser.add_argument(
-        "--refer_seg_data", default="refcocog", type=str
+        "--refer_seg_data", default="refcoco||refcoco+||refcocog", type=str
     )
     # parser.add_argument("--vqa_data", default="llava_instruct_150k", type=str)
     parser.add_argument("--reason_seg_data", default="ReasonSeg|train", type=str)
@@ -99,8 +99,8 @@ def parse_args(args):
     parser.add_argument("--dataset_dir", default="/home/hrkim/dataset", type=str)
     parser.add_argument("--log_base_dir", default="./runs", type=str)
     parser.add_argument("--exp_name", default="lisa", type=str)
-    parser.add_argument("--epochs", default=10, type=int)
-    parser.add_argument("--steps_per_epoch", default=200, type=int)
+    parser.add_argument("--epochs", default=20, type=int)
+    parser.add_argument("--steps_per_epoch", default=300, type=int)
     parser.add_argument(
         "--batch_size", default=2, type=int, help="batch size per device per step"
     )
@@ -438,7 +438,7 @@ def main(args):
         if args.local_rank == 0:
             print(f"[Evaluation Mode] Loading checkpoint weights from: {args.ckpt}")
         print("Loading state_dict from ckpt")
-        load_path, client_state = model_engine.load_checkpoint("runs/key_fusion_ce_es_upsamle_sa_tmd/ckpt_model")
+        load_path, client_state = model_engine.load_checkpoint("runs/key_fusion_ce_es_upsamle_sa_tmd_ref/ckpt_model")
 
 
 
