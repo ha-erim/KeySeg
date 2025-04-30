@@ -154,6 +154,7 @@ def collate_fn(
         sampled_classes,
         inference,
         keywords,
+        _,
     ) in batch:
         image_path_list.append(image_path)
         images_list.append(images)

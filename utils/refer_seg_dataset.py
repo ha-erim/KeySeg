@@ -348,19 +348,19 @@ class ReferSegDataset(torch.utils.data.Dataset):
             masks.append(m)
         masks = torch.from_numpy(np.stack(masks, axis=0))
         label = torch.ones(masks.shape[1], masks.shape[2]) * self.ignore_label
+        keywords = sampled_classes
 
-        # 반환 (총 12개 항목)
         return (
-            image_path,            # str
-            image,                 # torch.Tensor (3, H, W)
-            image_clip,            # torch.Tensor (3, H, W)
-            conversations,         # list of str
-            masks,                 # torch.Tensor (N, H, W)
-            label,                 # torch.Tensor (H, W)
-            resize,                # tuple
-            questions,             # list of str
-            sampled_classes,       # list of str (→ keywords)
-            False,                 # inference flag
-            sampled_classes        # keywords list
+            image_path,         # 1
+            image,              # 2
+            image_clip,         # 3
+            conversations,      # 4
+            masks,              # 5
+            label,              # 6
+            resize,             # 7
+            questions,          # 8
+            sampled_classes,    # 9
+            False,              # 10
+            keywords,     # 11 (keyword로 사용)
         )
 
