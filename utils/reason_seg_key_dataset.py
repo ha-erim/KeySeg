@@ -588,38 +588,74 @@ class ValDataset(torch.utils.data.Dataset):
             )
             self.images = images
             self.data_type = "reason_seg"
+        # elif len(splits) == 3:
+        #     ds, splitBy, split = splits
+        #     self.base_image_dir = os.path.join(self.base_image_dir,'refer_seg')
+        #     refer_api = REFER(self.base_image_dir, ds, splitBy)
+        #     ref_ids_val = refer_api.getRefIds(split=split)
+        #     images_ids_val = refer_api.getImgIds(ref_ids=ref_ids_val)
+        #     refs_val = refer_api.loadRefs(ref_ids=ref_ids_val)
+        #     refer_seg_ds = {}
+        #     refer_seg_ds["images"] = []
+        #     loaded_images = refer_api.loadImgs(image_ids=images_ids_val)
+        #     for item in loaded_images:
+        #         item = item.copy()
+        #         if ds == "refclef":
+        #             item["file_name"] = os.path.join(
+        #                 base_image_dir, "images/saiapr_tc-12", item["file_name"]
+        #             )
+        #         elif ds in ["refcoco", "refcoco+", "refcocog", "grefcoco"]:
+        #             item["file_name"] = os.path.join(
+        #                 self.base_image_dir,
+        #                 "images/mscoco/images/train2014",
+        #                 item["file_name"],
+        #             )
+        #         refer_seg_ds["images"].append(item)
+        #     refer_seg_ds["annotations"] = refer_api.Anns  # anns_val
+
+        #     img2refs = {}
+        #     for ref in refs_val:
+        #         image_id = ref["image_id"]
+        #         img2refs[image_id] = img2refs.get(image_id, []) + [
+        #             ref,
+        #         ]
+        #     refer_seg_ds["img2refs"] = img2refs
+        #     self.refer_seg_ds = refer_seg_ds
+        #     self.data_type = "refer_seg"
         elif len(splits) == 3:
             ds, splitBy, split = splits
+            self.base_image_dir = os.path.join(self.base_image_dir, 'refer_seg')
             refer_api = REFER(self.base_image_dir, ds, splitBy)
             ref_ids_val = refer_api.getRefIds(split=split)
-            images_ids_val = refer_api.getImgIds(ref_ids=ref_ids_val)
             refs_val = refer_api.loadRefs(ref_ids=ref_ids_val)
-            refer_seg_ds = {}
-            refer_seg_ds["images"] = []
-            loaded_images = refer_api.loadImgs(image_ids=images_ids_val)
+
+            # 하나의 샘플 = 하나의 ref 표현
+            self.images = refs_val  # ✅ reason_seg와 구조 맞춤
+            self.refer_seg_ds = {
+                "images": [],  # mscoco style image dicts
+                "annotations": refer_api.Anns,
+                "img2refs": {}
+            }
+
+            loaded_images = refer_api.loadImgs(image_ids=refer_api.getImgIds(ref_ids=ref_ids_val))
             for item in loaded_images:
                 item = item.copy()
                 if ds == "refclef":
                     item["file_name"] = os.path.join(
-                        base_image_dir, "images/saiapr_tc-12", item["file_name"]
+                        self.base_image_dir, "images/saiapr_tc-12", item["file_name"]
                     )
-                elif ds in ["refcoco", "refcoco+", "refcocog", "grefcoco"]:
+                else:
                     item["file_name"] = os.path.join(
-                        base_image_dir,
+                        self.base_image_dir,
                         "images/mscoco/images/train2014",
                         item["file_name"],
                     )
-                refer_seg_ds["images"].append(item)
-            refer_seg_ds["annotations"] = refer_api.Anns  # anns_val
+                self.refer_seg_ds["images"].append(item)
 
-            img2refs = {}
             for ref in refs_val:
                 image_id = ref["image_id"]
-                img2refs[image_id] = img2refs.get(image_id, []) + [
-                    ref,
-                ]
-            refer_seg_ds["img2refs"] = img2refs
-            self.refer_seg_ds = refer_seg_ds
+                self.refer_seg_ds["img2refs"].setdefault(image_id, []).append(ref)
+
             self.data_type = "refer_seg"
 
         self.ds = ds

@@ -12,7 +12,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Convert DeepSpeed checkpoint to Hugging Face format")
     parser.add_argument("--version", type=str, default="xinlai/LISA-7B-v1")
     parser.add_argument("--deepspeed_ckpt", type=str,
-                        default="runs/lisa_finetune_key_fusion_ce_es_ca_temp/ckpt_model/global_step200/mp_rank_00_model_states.pt")
+                        default="runs/key_fusion_ce_es_upsamle_sa_tmd_ref_200/ckpt_model/global_step600/mp_rank_00_model_states.pt")
     parser.add_argument("--vision_pretrained", type=str, default="/home/hrkim/dataset/sam_vit_h_4b8939.pth")
     parser.add_argument("--precision", type=str, default="bf16",
                         choices=["fp32", "bf16", "fp16"])
@@ -66,7 +66,7 @@ def main():
     model.load_state_dict(state_dict, strict=False)
 
     # === Save as Hugging Face format ===
-    save_path = "runs/lisa_finetune_key_fusion_ce_es_ca_temp/hf"
+    save_path = "runs/key_fusion_ce_es_upsamle_sa_tmd_ref_200/hf"
     print(f"💾 Saving merged model to: {save_path}")
     model.save_pretrained(save_path)
     tokenizer.save_pretrained(save_path)

@@ -359,6 +359,12 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
         last_hidden_state = hidden_states
         
         if inference:
+            # B, T = input_ids.shape
+            # D = last_hidden_state.shape[-1]
+            # last_hidden_state = last_hidden_state.view(B, -1, D) 
+            # total_token_len = last_hidden_state.shape[0]
+            # seg_token_mask = seg_token_mask.view(-1)[:total_token_len]
+            # key_token_mask = key_token_mask.view(-1)[:total_token_len]
             last_hidden_state = last_hidden_state.view(input_ids.shape[0], -1, last_hidden_state.shape[-1])  # (B, T, D)
 
         pred_embeddings = last_hidden_state[seg_token_mask]

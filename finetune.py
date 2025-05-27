@@ -17,6 +17,7 @@ from model.KISA import LISAForCausalLM
 from model.llava import conversation as conversation_lib
 from utils.reason_seg_key_dataset import ValDataset, collate_fn_val
 from utils.reason_refer import HybridDataset, collate_fn
+from utils.refer_seg_dataset import ReferSegValDataset
 from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                          AverageMeter, ProgressMeter, Summary, dict_to_cuda,
                          intersectionAndUnionGPU)
@@ -25,24 +26,27 @@ import matplotlib.pyplot as plt
 import uuid
 from datetime import datetime
 
-def visualize_masks(image_tensor, gt_mask, pred_mask, save_path, idx=0, epoch=0):
+def visualize_masks(image_tensor, gt_mask, pred_mask, save_path, idx=0, epoch=0,
+                    prompt: str = "", image_path: str = ""):
     # 저장 경로에 epoch 디렉토리 추가
     epoch_dir = os.path.join(save_path, f"epoch{epoch}")
     os.makedirs(epoch_dir, exist_ok=True)
 
-    # 이미지/마스크 변환
-    image_np = image_tensor[idx].to(torch.float32).permute(1, 2, 0).cpu().numpy()
-    pred_np = pred_mask[idx].to(torch.float32).cpu().numpy()
-    gt_np = gt_mask[idx].to(torch.float32).cpu().numpy()
+    # === 정규화 되지 않은 이미지로 복원 ===
+    image_np = image_tensor[idx].cpu().numpy()
+    if image_np.shape[0] == 3:
+        image_np = image_np.transpose(1, 2, 0)  # CHW → HWC
 
-    # 고유 파일명 생성
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    unique_id = f"{timestamp}_{uuid.uuid4().hex[:8]}"
-    filename = f"sample_{idx}_{unique_id}.png"
-    save_dir = os.path.join(epoch_dir, filename)
+    if image_np.max() <= 1.0:
+        image_np = (image_np * 255).clip(0, 255).astype(np.uint8)
+    else:
+        image_np = image_np.astype(np.uint8)
 
-    # 시각화 저장
-    fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+    pred_np = (pred_mask[idx].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+    gt_np = (gt_mask[idx].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+
+    # === 시각화 저장 ===
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
     axs[0].imshow(image_np)
     axs[0].set_title("Input Image")
     axs[0].axis('off')
@@ -55,8 +59,16 @@ def visualize_masks(image_tensor, gt_mask, pred_mask, save_path, idx=0, epoch=0)
     axs[2].set_title("Predicted Mask")
     axs[2].axis('off')
 
+    # 텍스트로 프롬프트 및 이미지 경로 출력
+    fig.suptitle(f"Prompt: {prompt}\nImage Path: {image_path}", fontsize=10, y=1.05)
+
     plt.tight_layout()
-    plt.savefig(save_dir)
+
+    # 순차 저장: sample_1.png, sample_2.png ...
+    existing = [f for f in os.listdir(epoch_dir) if f.endswith(".png")]
+    sample_idx = len(existing) + 1
+    save_file = os.path.join(epoch_dir, f"sample_{sample_idx}.png")
+    plt.savefig(save_file, bbox_inches='tight')
     plt.close()
     
 def parse_args(args):
@@ -95,12 +107,13 @@ def parse_args(args):
     # parser.add_argument("--vqa_data", default="llava_instruct_150k", type=str)
     parser.add_argument("--reason_seg_data", default="ReasonSeg|train", type=str)
     parser.add_argument("--val_dataset", default="ReasonSeg|val", type=str)
-    parser.add_argument("--test_dataset", default="ReasonSeg|test", type=str)
+    parser.add_argument("--test_dataset", default="refcocog|umd|test", type=str)
+    # parser.add_argument("--test_dataset", default="ReasonSeg|test", type=str)
     parser.add_argument("--dataset_dir", default="/home/hrkim/dataset", type=str)
     parser.add_argument("--log_base_dir", default="./runs", type=str)
     parser.add_argument("--exp_name", default="lisa", type=str)
     parser.add_argument("--epochs", default=20, type=int)
-    parser.add_argument("--steps_per_epoch", default=300, type=int)
+    parser.add_argument("--steps_per_epoch", default=200, type=int)
     parser.add_argument(
         "--batch_size", default=2, type=int, help="batch size per device per step"
     )
@@ -113,9 +126,9 @@ def parse_args(args):
     parser.add_argument("--workers", default=4, type=int)
     parser.add_argument("--lr", default=0.0003, type=float)
     parser.add_argument("--ce_loss_weight", default=1e-4, type=float) #1.0
-    parser.add_argument("--dice_loss_weight", default=2.0, type=float) #0.5 -> 2.0
-    parser.add_argument("--bce_loss_weight", default=2.0, type=float) #2.0 
-    parser.add_argument("--key_loss_weight", default=1.0, type=float) # 3.0
+    parser.add_argument("--dice_loss_weight", default=0.5, type=float) #2.0
+    parser.add_argument("--bce_loss_weight", default=2.0, type=float)
+    parser.add_argument("--key_loss_weight", default=1.0, type=float)
     parser.add_argument("--lora_alpha", default=16, type=int)
     parser.add_argument("--lora_dropout", default=0.05, type=float)
     parser.add_argument("--lora_target_modules", default="q_proj,v_proj", type=str)
@@ -134,7 +147,7 @@ def parse_args(args):
     parser.add_argument("--vision_pretrained", default="/home/hrkim/dataset/sam_vit_h_4b8939.pth", type=str)
     parser.add_argument("--out_dim", default=256, type=int)
     parser.add_argument("--resume", default="", type=str)
-    parser.add_argument("--print_freq", default=1, type=int)
+    parser.add_argument("--print_freq", default=30, type=int)
     parser.add_argument("--start_epoch", default=0, type=int)
     parser.add_argument("--gradient_checkpointing", action="store_true", default=True)
     # parser.add_argument("--train_mask_decoder", action="store_true", default=True)
@@ -350,7 +363,14 @@ def main(args):
         print(f"Training with {len(train_dataset)} examples.")
     
     if args.test_mode:
-        test_dataset = ValDataset(
+        # test_dataset = ValDataset(
+        #     args.dataset_dir,
+        #     tokenizer,
+        #     args.vision_tower,
+        #     args.test_dataset,
+        #     args.image_size,
+        # )
+        test_dataset = ReferSegValDataset(
             args.dataset_dir,
             tokenizer,
             args.vision_tower,
@@ -438,7 +458,7 @@ def main(args):
         if args.local_rank == 0:
             print(f"[Evaluation Mode] Loading checkpoint weights from: {args.ckpt}")
         print("Loading state_dict from ckpt")
-        load_path, client_state = model_engine.load_checkpoint("runs/key_fusion_ce_es_upsamle_sa_tmd_ref/ckpt_model")
+        load_path, client_state = model_engine.load_checkpoint("runs/key_fusion_ce_es_upsamle_sa_tmd_ref_200/ckpt_model")
 
 
 
@@ -501,7 +521,7 @@ def main(args):
     
     if args.test_mode == True:
         # ReasonSeg|test
-        print("validation with testset")
+        print("evaluation with testset")
         giou, ciou = validate(test_loader, model_engine, 0, writer, args)
         exit()
 

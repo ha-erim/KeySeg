@@ -14,6 +14,157 @@ from model.segment_anything.utils.transforms import ResizeLongestSide
 from .grefer import G_REFER
 from .refer import REFER
 from .utils import ANSWER_LIST, SHORT_QUESTION_LIST
+from model.llava.constants import DEFAULT_IMAGE_TOKEN
+
+import os
+import cv2
+import numpy as np
+import torch
+import torch.nn.functional as F
+from pycocotools import mask
+from transformers import CLIPImageProcessor
+from model.llava import conversation as conversation_lib
+from model.segment_anything.utils.transforms import ResizeLongestSide
+from .refer import REFER
+
+
+class ReferSegValDataset(torch.utils.data.Dataset):
+    pixel_mean = torch.Tensor([123.675, 116.28, 103.53]).view(-1, 1, 1)
+    pixel_std = torch.Tensor([58.395, 57.12, 57.375]).view(-1, 1, 1)
+    img_size = 1024
+    ignore_label = 255
+
+    def __init__(self, base_image_dir, tokenizer, vision_tower, val_dataset, image_size=1024):
+        self.base_image_dir = base_image_dir
+        splits = val_dataset.split("|")
+
+        if len(splits) == 2:
+            ds, split = splits
+            images = glob.glob(
+                os.path.join(self.base_image_dir, "reason_seg", ds, split, "*.jpg")
+            )
+            self.images = images
+            self.data_type = "reason_seg"
+
+        elif len(splits) == 3:
+            ds, splitBy, split = splits
+            self.base_image_dir = os.path.join(self.base_image_dir, 'refer_seg')
+            refer_api = REFER(self.base_image_dir, ds, splitBy)
+
+            # refs와 이미지 매핑
+            self.refs = refer_api.loadRefs(ref_ids=refer_api.getRefIds(split=split))
+            image_ids = list(set(ref["image_id"] for ref in self.refs))  # ✅ image_id 커버 완전하게
+            loaded_images = refer_api.loadImgs(image_ids=image_ids)
+            self.imgs = {img["id"]: img for img in loaded_images}
+
+            # 🛡️ KeyError 방지: 존재하지 않는 image_id 제거
+            missing_ids = [ref["image_id"] for ref in self.refs if ref["image_id"] not in self.imgs]
+            if len(missing_ids) > 0:
+                print(f"[Missing] {len(missing_ids)} image_ids: showing first 5: {missing_ids[:5]}")
+                self.refs = [ref for ref in self.refs if ref["image_id"] in self.imgs]
+
+            self.annotations = refer_api.Anns
+            self.data_type = "refer_seg"
+
+        self.ds = ds
+        self.image_size = image_size
+        self.tokenizer = tokenizer
+        self.transform = ResizeLongestSide(image_size)
+        self.clip_image_processor = CLIPImageProcessor.from_pretrained(vision_tower)
+
+    def __len__(self):
+        if self.data_type == "refer_seg":
+            return len(self.refs)
+        else:
+            return len(self.images)
+
+    def preprocess(self, x: torch.Tensor) -> torch.Tensor:
+        x = (x - self.pixel_mean) / self.pixel_std
+        h, w = x.shape[-2:]
+        x = F.pad(x, (0, self.img_size - w, 0, self.img_size - h))
+        return x
+
+    def __getitem__(self, idx):
+        if self.data_type == "refer_seg":
+            ref = self.refs[idx]
+            image_id = ref["image_id"]
+            image_info = self.imgs[image_id]
+            image_path = image_info["file_name"]
+
+            if self.ds == "refclef":
+                image_path = os.path.join(
+                    self.base_image_dir, "images/saiapr_tc-12", image_info["file_name"]
+                )
+            else:
+                image_path = os.path.join(
+                    self.base_image_dir,
+                    "images/mscoco/images/train2014",
+                    image_info["file_name"],
+                )
+
+            sents = [s["sent"].strip().lower() for s in ref["sentences"]]
+            ann_id = ref["ann_id"]
+            sampled_sents = [sents[0]]
+            sampled_ann_ids = [ann_id]
+
+        else:  # reason_seg
+            image_path = self.images[idx]
+            image = cv2.imread(image_path)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            json_path = image_path.replace(".jpg", ".json")
+            mask_json, sampled_sents, _ = get_mask_from_json(json_path, image)
+            sampled_sents = [sampled_sents[0]]
+
+        # Load image
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_clip = self.clip_image_processor.preprocess(image, return_tensors="pt")["pixel_values"][0]
+        image = self.transform.apply_image(image)
+        resize = image.shape[:2]
+        image = self.preprocess(torch.from_numpy(image).permute(2, 0, 1).contiguous())
+
+        # conversation
+        conversations = []
+        conv = conversation_lib.default_conversation.copy()
+        for text in sampled_sents:
+            conv.messages = []
+            conv.append_message(conv.roles[0], DEFAULT_IMAGE_TOKEN + "\n" + text)
+            conv.append_message(conv.roles[1], "[SEG].")
+            conversations.append(conv.get_prompt())
+
+        if self.data_type == "refer_seg":
+            ann = self.annotations[ann_id]
+            if not ann["segmentation"]:
+                m = np.zeros((image_info["height"], image_info["width"]), dtype=np.uint8)
+            else:
+                if isinstance(ann["segmentation"][0], list):
+                    rle = mask.frPyObjects(ann["segmentation"], image_info["height"], image_info["width"])
+                else:
+                    rle = ann["segmentation"]
+                    for r in rle:
+                        if not isinstance(r["counts"], bytes):
+                            r["counts"] = r["counts"].encode()
+                m = mask.decode(rle)
+                m = np.sum(m, axis=2).astype(np.uint8)
+            masks = torch.from_numpy(np.expand_dims(m, axis=0))
+        else:
+            masks = torch.from_numpy(np.expand_dims(mask_json, axis=0))
+
+        labels = torch.ones(masks.shape[1], masks.shape[2]) * self.ignore_label
+        inference = True
+
+        return (
+            image_path,
+            image,
+            image_clip,
+            conversations,
+            masks,
+            labels,
+            resize,
+            None,
+            None,
+            inference,
+        )
 
 
 class ReferSegDataset(torch.utils.data.Dataset):

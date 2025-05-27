@@ -16,6 +16,8 @@ from torch.utils.tensorboard import SummaryWriter
 from model.LISA import LISAForCausalLM
 from model.llava import conversation as conversation_lib
 from utils.dataset import HybridDataset, ValDataset, collate_fn
+from utils.refer_seg_dataset import ReferSegValDataset
+from utils.reason_seg_key_dataset import collate_fn_val
 from utils.utils import (DEFAULT_IM_END_TOKEN, DEFAULT_IM_START_TOKEN,
                          AverageMeter, ProgressMeter, Summary, dict_to_cuda,
                          intersectionAndUnionGPU)
@@ -60,7 +62,7 @@ def parse_args(args):
     )
     parser.add_argument("--vqa_data", default="llava_instruct_150k", type=str)
     parser.add_argument("--reason_seg_data", default="ReasonSeg|train", type=str)
-    parser.add_argument("--val_dataset", default="ReasonSeg|test", type=str)
+    parser.add_argument("--val_dataset", default="refcocog|umd|test", type=str)
     parser.add_argument("--dataset_dir", default="./dataset", type=str)
     parser.add_argument("--log_base_dir", default="./runs", type=str)
     parser.add_argument("--exp_name", default="lisa", type=str)
@@ -251,13 +253,23 @@ def main(args):
     #     reason_seg_data=args.reason_seg_data,
     #     explanatory=args.explanatory,
     # )
-    val_dataset = ValDataset(
-        args.dataset_dir,
-        tokenizer,
-        args.vision_tower,
-        args.val_dataset,
-        args.image_size,
-    )
+    
+    # val_dataset = ValDataset(
+    #     args.dataset_dir,
+    #     tokenizer,
+    #     args.vision_tower,
+    #     args.val_dataset,
+    #     args.image_size,
+    # )
+    
+    val_dataset = ReferSegValDataset(
+            args.dataset_dir,
+            tokenizer,
+            args.vision_tower,
+            args.val_dataset,
+            args.image_size,
+        )
+    
     print(f"Testing with {len(val_dataset)} examples.")
     # if args.no_eval == False:
     #     val_dataset = ValDataset(
@@ -374,8 +386,55 @@ def main(args):
         print(f'giou: {giou}, ciou: {ciou}')
         exit()
 
+import matplotlib.pyplot as plt
+import uuid
+from datetime import datetime\
+    
+def visualize_masks(image_tensor, gt_mask, pred_mask, save_path, idx=0, epoch=0,
+                    prompt: str = "", image_path: str = ""):
+    # 저장 경로에 epoch 디렉토리 추가
+    epoch_dir = os.path.join(save_path, f"epoch{epoch}")
+    os.makedirs(epoch_dir, exist_ok=True)
 
+    # === 정규화 되지 않은 이미지로 복원 ===
+    image_np = image_tensor[idx].cpu().numpy()
+    if image_np.shape[0] == 3:
+        image_np = image_np.transpose(1, 2, 0)  # CHW → HWC
 
+    if image_np.max() <= 1.0:
+        image_np = (image_np * 255).clip(0, 255).astype(np.uint8)
+    else:
+        image_np = image_np.astype(np.uint8)
+
+    pred_np = (pred_mask[idx].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+    gt_np = (gt_mask[idx].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+
+    # === 시각화 저장 ===
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    axs[0].imshow(image_np)
+    axs[0].set_title("Input Image")
+    axs[0].axis('off')
+
+    axs[1].imshow(gt_np, cmap='gray')
+    axs[1].set_title("GT Mask")
+    axs[1].axis('off')
+
+    axs[2].imshow(pred_np, cmap='gray')
+    axs[2].set_title("Predicted Mask")
+    axs[2].axis('off')
+
+    # 텍스트로 프롬프트 및 이미지 경로 출력
+    fig.suptitle(f"Prompt: {prompt}\nImage Path: {image_path}", fontsize=10, y=1.05)
+
+    plt.tight_layout()
+
+    # 순차 저장: sample_1.png, sample_2.png ...
+    existing = [f for f in os.listdir(epoch_dir) if f.endswith(".png")]
+    sample_idx = len(existing) + 1
+    save_file = os.path.join(epoch_dir, f"sample_{sample_idx}.png")
+    plt.savefig(save_file, bbox_inches='tight')
+    plt.close()
+    
 def validate(val_loader, model_engine, epoch, writer, args):
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
@@ -404,6 +463,19 @@ def validate(val_loader, model_engine, epoch, writer, args):
         masks_list = output_dict["gt_masks"][0].int()
         output_list = (pred_masks[0] > 0).int()
         assert len(pred_masks) == 1
+        
+        # === 시각화 추가 ===
+        if args.local_rank == 0:
+            visualize_masks(
+                image_tensor=input_dict["images"].float().cpu(),
+                gt_mask=masks_list,
+                pred_mask=(pred_masks[0] > 0).float().cpu(),
+                save_path=args.vis_save_path,
+                idx=0,
+                epoch=epoch,
+                prompt=input_dict["questions_list"][0] if "questions_list" in input_dict else "",
+                image_path=input_dict["image_paths"][0] if "image_paths" in input_dict else "",
+            )
 
         intersection, union, acc_iou = 0.0, 0.0, 0.0
         for mask_i, output_i in zip(masks_list, output_list):
@@ -419,6 +491,8 @@ def validate(val_loader, model_engine, epoch, writer, args):
         intersection_meter.update(intersection), union_meter.update(
             union
         ), acc_iou_meter.update(acc_iou, n=masks_list.shape[0])
+        
+        
 
     intersection_meter.all_reduce()
     union_meter.all_reduce()
@@ -427,7 +501,8 @@ def validate(val_loader, model_engine, epoch, writer, args):
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10)
     ciou = iou_class[1]
     giou = acc_iou_meter.avg[1]
-
+    
+        
     if args.local_rank == 0:
         writer.add_scalar("val/giou", giou, epoch)
         writer.add_scalar("val/ciou", ciou, epoch)

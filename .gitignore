@@ -4,4 +4,5 @@ runs/
 mask_vis_output/
 finetune.sh
 test.sh
+vis_output/
 
