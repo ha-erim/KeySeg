@@ -107,8 +107,12 @@ def parse_args(args):
     # parser.add_argument("--vqa_data", default="llava_instruct_150k", type=str)
     parser.add_argument("--reason_seg_data", default="ReasonSeg|train", type=str)
     parser.add_argument("--val_dataset", default="ReasonSeg|val", type=str)
+    
+    # parser.add_argument("--test_dataset", default="refcoco|unc|testB", type=str)
+    # parser.add_argument("--test_dataset", default="refcoco+|unc|testB", type=str)
     parser.add_argument("--test_dataset", default="refcocog|umd|test", type=str)
     # parser.add_argument("--test_dataset", default="ReasonSeg|test", type=str)
+    
     parser.add_argument("--dataset_dir", default="/home/hrkim/dataset", type=str)
     parser.add_argument("--log_base_dir", default="./runs", type=str)
     parser.add_argument("--exp_name", default="lisa", type=str)
@@ -458,7 +462,7 @@ def main(args):
         if args.local_rank == 0:
             print(f"[Evaluation Mode] Loading checkpoint weights from: {args.ckpt}")
         print("Loading state_dict from ckpt")
-        load_path, client_state = model_engine.load_checkpoint("runs/key_fusion_ce_es_upsamle_sa_tmd_ref_200/ckpt_model")
+        load_path, client_state = model_engine.load_checkpoint("runs/ablation_FM_CASA/ckpt_model")
 
 
 

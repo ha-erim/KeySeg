@@ -86,7 +86,6 @@ class KeywordSegFusionModule(nn.Module):
         )
 
         self.upsample_size = upsample_size
-
     def forward(self, key_list, segs_list):
         fused_segs = []
         for i in range(len(segs_list)):
@@ -112,14 +111,99 @@ class KeywordSegFusionModule(nn.Module):
 
             context = self.out_proj(context)
 
-            seg = upsampled_seg + context
-            # seg = torch.nan_to_num(seg, nan=0.0, posinf=1e3, neginf=-1e3)
+            # seg = upsampled_seg + context
             # seg = self.norm1(seg)
 
-            seg_sa = self.self_attn(seg.unsqueeze(0)).squeeze(0)
+            seg_sa = self.self_attn(context.unsqueeze(0)).squeeze(0)
             # seg = self.norm2(seg + seg_sa)
 
-            seg = seg + self.mlp(seg)
+            #residual
+            # seg = seg + self.mlp(seg_sa)
+
+            seg = seg_sa.unsqueeze(0).transpose(1, 2)
+            seg = F.interpolate(seg, size=segs_list[i].size(0), mode='linear', align_corners=False)
+            seg = seg.transpose(1, 2).squeeze(0)
+
+            seg = seg.to(torch.bfloat16)  # 최종 bf16으로 통일
+
+            fused_segs.append(seg)
+        return fused_segs
+
+    # def forward(self, key_list, segs_list):
+    #     fused_segs = []
+    #     for i in range(len(segs_list)):
+    #         seg = segs_list[i]
+    #         key = key_list[i]
+
+    #         if key.dim() == 1:
+    #             key = key.unsqueeze(0)
+
+    #         seg = seg.unsqueeze(0).transpose(1, 2)
+    #         upsampled_seg = F.interpolate(seg, size=self.upsample_size, mode='linear', align_corners=False)
+    #         upsampled_seg = upsampled_seg.transpose(1, 2).squeeze(0)
+
+    #         Q = self.query_proj(upsampled_seg).to(torch.float32)
+    #         K = self.key_proj(key).to(torch.float32)
+    #         V = self.value_proj(key).to(torch.float32)
+
+    #         attn_scores = torch.matmul(Q, K.transpose(0, 1)) / (Q.size(-1) ** 0.5)
+    #         attn_weights = F.softmax(attn_scores, dim=-1)
+    #         context = torch.matmul(attn_weights, V)
+
+    #         context = context.to(torch.bfloat16)  # 🔥 context를 bf16로 변환
+
+    #         context = self.out_proj(context)
+
+    #         # seg = upsampled_seg + context
+    #         # seg = self.norm1(seg)
+
+    #         seg_sa = self.self_attn(seg.unsqueeze(0)).squeeze(0)
+    #         # seg = self.norm2(seg + seg_sa)
+
+    #         #residual
+    #         seg = seg + self.mlp(seg_sa)
+
+    #         seg = seg.unsqueeze(0).transpose(1, 2)
+    #         seg = F.interpolate(seg, size=segs_list[i].size(0), mode='linear', align_corners=False)
+    #         seg = seg.transpose(1, 2).squeeze(0)
+
+    #         seg = seg.to(torch.bfloat16)  # 최종 bf16으로 통일
+
+    #         fused_segs.append(seg)
+    #     return fused_segs
+
+class SegFusionModule(nn.Module):
+    def __init__(self, text_dim, vision_dim, hidden_dim=256, upsample_size=12):
+        super().__init__()
+        self.query_proj = nn.Linear(vision_dim, hidden_dim)
+        self.key_proj = nn.Linear(text_dim, hidden_dim)
+        self.value_proj = nn.Linear(text_dim, hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, vision_dim)
+
+        # 🔵 out_proj는 float32로 강제 유지
+        self.out_proj = self.out_proj.to(torch.float32)
+
+        self.self_attn = LightSelfAttention(dim=vision_dim)
+        self.norm1 = nn.LayerNorm(vision_dim)
+        self.norm2 = nn.LayerNorm(vision_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(vision_dim, vision_dim * 2),
+            nn.GELU(),
+            nn.Linear(vision_dim * 2, vision_dim),
+        )
+
+        self.upsample_size = upsample_size
+
+    def forward(self, key_list, segs_list):
+        fused_segs = []
+        for i in range(len(segs_list)):
+            seg = segs_list[i]
+
+            seg = seg.unsqueeze(0).transpose(1, 2)
+            upsampled_seg = F.interpolate(seg, size=self.upsample_size, mode='linear', align_corners=False)
+
+            upsampled_seg = upsampled_seg.permute(0, 2, 1)
+            seg = self.self_attn(upsampled_seg).squeeze(0)
 
             seg = seg.unsqueeze(0).transpose(1, 2)
             seg = F.interpolate(seg, size=segs_list[i].size(0), mode='linear', align_corners=False)
@@ -129,7 +213,6 @@ class KeywordSegFusionModule(nn.Module):
 
             fused_segs.append(seg)
         return fused_segs
-
 
 
 def dice_loss(
@@ -273,6 +356,11 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
             text_dim=self.fusion_dim, #256
             vision_dim=self.fusion_dim,
         )
+        
+        # self.keyword_fusion = SegFusionModule(
+        #     text_dim=self.fusion_dim, #256
+        #     vision_dim=self.fusion_dim,
+        # )
 
         self.keyword_text_proj = nn.Linear(
            self.proj_in_dim, self.proj_out_dim # 4096,256
@@ -384,6 +472,10 @@ class LISAForCausalLM(LlavaLlamaForCausalLM):
                 text_dim=key_embedding[0].shape[-1],
                 vision_dim=pred_embeddings[0].shape[-1]
             ).to(pred_embeddings[0].device)
+            # self.keyword_fusion = SegFusionModule(
+            #     text_dim=key_embedding[0].shape[-1],
+            #     vision_dim=pred_embeddings[0].shape[-1]
+            # ).to(pred_embeddings[0].device)
 
         pred_embeddings = self.keyword_fusion(key_embedding, pred_embeddings)
 

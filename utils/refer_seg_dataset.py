@@ -1,5 +1,6 @@
 import os
 import random
+import glob
 
 import cv2
 import numpy as np
@@ -26,6 +27,11 @@ from transformers import CLIPImageProcessor
 from model.llava import conversation as conversation_lib
 from model.segment_anything.utils.transforms import ResizeLongestSide
 from .refer import REFER
+
+from .data_processing import get_mask_from_json
+from .utils import (ANSWER_LIST, DEFAULT_IMAGE_TOKEN,
+                    EXPLANATORY_QUESTION_LIST, LONG_QUESTION_LIST,
+                    SHORT_QUESTION_LIST)
 
 
 class ReferSegValDataset(torch.utils.data.Dataset):
@@ -108,6 +114,7 @@ class ReferSegValDataset(torch.utils.data.Dataset):
             sampled_ann_ids = [ann_id]
 
         else:  # reason_seg
+
             image_path = self.images[idx]
             image = cv2.imread(image_path)
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)

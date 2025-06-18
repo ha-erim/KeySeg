@@ -1,1 +1,2 @@
-deepspeed --include localhost:2,3 finetune.py --exp_name "key_fusion_ce_es_upsamle_sa_tmd_ref_200"
+# deepspeed --include localhost:2,3 finetune.py --exp_name "key_fusion_ce_es_upsamle_sa_tmd_ref_200"
+deepspeed --include localhost:2,3 finetune.py --exp_name "ablation_FM_CASA"
