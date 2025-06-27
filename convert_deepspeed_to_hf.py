@@ -67,11 +67,11 @@ def main():
 
     # === Save as Hugging Face format ===
     save_path = "runs/key_fusion_ce_es_upsamle_sa_tmd_ref_200/hf"
-    print(f"💾 Saving merged model to: {save_path}")
+    print(f"Saving merged model to: {save_path}")
     model.save_pretrained(save_path)
     tokenizer.save_pretrained(save_path)
 
-    print("✅ Done.")
+    print("Done")
 
 
 if __name__ == "__main__":
