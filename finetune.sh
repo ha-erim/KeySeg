@@ -1,1 +1,0 @@
-deepspeed --include localhost:2,3 finetune.py --exp_name "KeySeg"
