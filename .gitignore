@@ -6,7 +6,7 @@ finetune.sh
 test.sh
 vis_output/
 
-rerfcocog_umd_test_questions.txt
+refcocog_umd_test_questions.txt
 requirements.txt
 requirements_lisa.txt
 model/LISA.py
